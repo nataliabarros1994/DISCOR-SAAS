@@ -1,0 +1,176 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                        String              @id @default(cuid())
+  clerkId                   String              @unique
+  email                     String              @unique
+  plan                      PlanType            @default(FREE)
+  createdAt                 DateTime            @default(now())
+
+  // Stripe subscription fields
+  stripeCustomerId          String?             @unique
+  stripeSubscriptionId      String?             @unique
+  stripeSubscriptionStatus  SubscriptionStatus?
+  stripePriceId             String?
+  subscriptionPeriod        BillingPeriod?
+  currentPeriodStart        DateTime?
+  currentPeriodEnd          DateTime?
+  cancelAtPeriodEnd         Boolean             @default(false)
+  canceledAt                DateTime?
+  trialEnd                  DateTime?
+
+  // Billing preferences
+  preferredBillingDay       Int?                // Day of month user prefers (1-28)
+  nextBillingDate           DateTime?           // Next scheduled charge date
+  lastReminderSent          DateTime?           // Last time reminder email was sent
+
+  quotas                    Quota[]
+  events                    Event[]
+  categories                Category[]
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  metadata  Json?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events    Event[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([slug])
+}
+
+model Event {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  scheduledFor DateTime? // Data e hora do evento/lembrete
+  categoryId  String
+  category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quotaId     String?
+  quota       Quota?    @relation(fields: [quotaId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@index([categoryId])
+  @@index([userId])
+  @@index([quotaId])
+  @@index([scheduledFor])
+}
+
+model Quota {
+  id        String   @id @default(cuid())
+  name      String
+  limit     Int
+  used      Int      @default(0)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events    Event[]
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model StripeEvent {
+  id          String   @id @default(cuid())
+  eventId     String   @unique // Stripe event ID (evt_xxx)
+  eventType   String   // Event type (customer.subscription.created, etc)
+  processed   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([eventId])
+  @@index([eventType])
+}
+
+model SystemEvent {
+  id        String   @id @default(cuid())
+  eventName String   // Event name (category.created, user.plan.upgraded, etc)
+  payload   Json     // Event payload
+  userId    String?  // Optional user context
+  createdAt DateTime @default(now())
+
+  @@index([eventName])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model PlanQuota {
+  id          String   @id @default(cuid())
+  plan        PlanType
+  quotaName   String   // category_count, event_count, webhooks_per_minute, etc
+  limit       Int      // -1 means unlimited
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([plan, quotaName])
+  @@index([plan])
+}
+
+model UserWebhook {
+  id          String        @id @default(cuid())
+  userId      String
+  name        String        // User-friendly name
+  url         String        // Webhook URL
+  secret      String        // HMAC secret for validation
+  events      String[]      // Array of event names to listen to
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  logs        WebhookLog[]
+
+  @@index([userId])
+  @@index([active])
+}
+
+model WebhookLog {
+  id              String      @id @default(cuid())
+  webhookId       String
+  webhook         UserWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  eventName       String
+  payload         Json
+  status          String      // success, failed, retrying
+  httpStatus      Int?
+  responseBody    String?
+  attemptCount    Int         @default(1)
+  lastAttemptAt   DateTime    @default(now())
+  nextRetryAt     DateTime?
+  createdAt       DateTime    @default(now())
+
+  @@index([webhookId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([nextRetryAt])
+}
+
+enum PlanType {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  active
+  canceled
+  incomplete
+  incomplete_expired
+  past_due
+  trialing
+  unpaid
+}
+
+enum BillingPeriod {
+  MONTHLY
+  ANNUAL
+}
